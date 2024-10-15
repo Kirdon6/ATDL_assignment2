@@ -11,7 +11,7 @@ from dgl.data import CiteseerGraphDataset, CoraGraphDataset, PubmedGraphDataset
 
 
 class GAT(nn.Module):
-    def __init__(self, in_size, hid_size, out_size, heads):
+    def __init__(self, in_size, hid_size, out_size, heads, num_layers):
         super().__init__()
         self.gat_layers = nn.ModuleList()
         # two-layer GAT
@@ -25,6 +25,14 @@ class GAT(nn.Module):
                 activation=F.elu,
             )
         )
+        for _ in range(num_layers):
+            self.gat_layers.append(dglnn.GATConv(
+                hid_size * heads[0],
+                hid_size,
+                heads[0],
+                feat_drop=0.6,
+                attn_drop=0.6,
+                activation=F.elu))
         self.gat_layers.append(
             dglnn.GATConv(
                 hid_size * heads[0],
@@ -40,7 +48,7 @@ class GAT(nn.Module):
         h = inputs
         for i, layer in enumerate(self.gat_layers):
             h = layer(g, h)
-            if i == 1:  # last layer
+            if i == len(self.gat_layers) - 1:  # last layer
                 h = h.mean(1)
             else:  # other layer(s)
                 h = h.flatten(1)
@@ -79,58 +87,3 @@ def train(g, features, labels, masks, model):
                 epoch, loss.item(), acc
             )
         )
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="cora",
-        help="Dataset name ('cora', 'citeseer').",
-    )
-    parser.add_argument(
-        "--dt",
-        type=str,
-        default="float",
-        help="data type(float, bfloat16)",
-    )
-    args = parser.parse_args()
-    print(f"Training with DGL built-in GATConv module.")
-
-    # load and preprocess dataset
-    transform = (
-        AddSelfLoop()
-    )  # by default, it will first remove self-loops to prevent duplication
-    if args.dataset == "cora":
-        data = CoraGraphDataset(transform=transform)
-    elif args.dataset == "citeseer":
-        data = CiteseerGraphDataset(transform=transform)
-    else:
-        raise ValueError("Unknown dataset: {}".format(args.dataset))
-    g = data[0]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    g = g.int().to(device)
-    features = g.ndata["feat"]
-    labels = g.ndata["label"]
-    masks = g.ndata["train_mask"], g.ndata["val_mask"], g.ndata["test_mask"]
-
-    # create GAT model
-    in_size = features.shape[1]
-    out_size = data.num_classes
-    model = GAT(in_size, 8, out_size, heads=[8, 1]).to(device)
-
-    # convert model and graph to bfloat16 if needed
-    if args.dt == "bfloat16":
-        g = dgl.to_bfloat16(g)
-        features = features.to(dtype=torch.bfloat16)
-        model = model.to(dtype=torch.bfloat16)
-
-    # model training
-    print("Training...")
-    train(g, features, labels, masks, model)
-
-    # test the model
-    print("Testing...")
-    acc = evaluate(g, features, labels, masks[2], model)
-    print("Test accuracy {:.4f}".format(acc))

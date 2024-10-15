@@ -1,24 +1,21 @@
-import argparse
-
-import dgl
 import dgl.nn as dglnn
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl import AddSelfLoop
-from dgl.data import CiteseerGraphDataset, CoraGraphDataset
 
 class GCN(nn.Module):
-    def __init__(self, in_size, hid_size, out_size):
+    def __init__(self, in_size, hid_size, out_size, num_layers, dropout):
         super().__init__()
         self.layers = nn.ModuleList()
         # two-layer GCN
-        self.layers.append(
-            dglnn.GraphConv(in_size, hid_size, activation=F.relu)
-        )
+        self.layers.append(dglnn.GraphConv(in_size, hid_size, activation=F.relu))
+
+        for _ in range(num_layers):
+            self.layers.append(dglnn.GraphConv(hid_size,hid_size,activation=F.relu))
+
         self.layers.append(dglnn.GraphConv(hid_size, out_size))
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, g, features):
         h = features
@@ -61,57 +58,3 @@ def train(g, features, labels, masks, model):
                 epoch, loss.item(), acc
             )
         )
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="cora",
-        help="Dataset name ('cora', 'citeseer').",
-    )
-    parser.add_argument(
-        "--dt",
-        type=str,
-        default="float",
-        help="data type(float, bfloat16)",
-    )
-    args = parser.parse_args()
-    print(f"Training with DGL built-in GraphConv module.")
-
-    # load and preprocess dataset
-    transform = (
-        AddSelfLoop()
-    )  # by default, it will first remove self-loops to prevent duplication
-    if args.dataset == "cora":
-        data = CoraGraphDataset(transform=transform)
-    elif args.dataset == "citeseer":
-        data = CiteseerGraphDataset(transform=transform)
-    else:
-        raise ValueError("Unknown dataset: {}".format(args.dataset))
-    g = data[0]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    g = g.int().to(device)
-    features = g.ndata["feat"]
-    labels = g.ndata["label"]
-    masks = g.ndata["train_mask"], g.ndata["val_mask"], g.ndata["test_mask"]
-
-    # create GCN model
-    in_size = features.shape[1]
-    out_size = data.num_classes
-    model = GCN(in_size, 16, out_size).to(device)
-
-    # convert model and graph to bfloat16 if needed
-    if args.dt == "bfloat16":
-        g = dgl.to_bfloat16(g)
-        features = features.to(dtype=torch.bfloat16)
-        model = model.to(dtype=torch.bfloat16)
-
-    # model training
-    print("Training...")
-    train(g, features, labels, masks, model)
-
-    # test the model
-    print("Testing...")
-    acc = evaluate(g, features, labels, masks[2], model)
-    print("Test accuracy {:.4f}".format(acc))
